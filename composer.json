@@ -1,0 +1,30 @@
+{
+    "name": "liara/sdk",
+    "type": "library",
+    "description": "Liara SDK for Laravel 5",
+    "license": "MIT",
+    "minimum-stability": "dev",
+    "authors": [
+        {
+            "name": "Mohammad Hossein Ebadollahi",
+            "email": "mhemrg120@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.5.0",
+        "guzzlehttp/guzzle": "~6.0",
+        "league/flysystem": "^1.0.40"
+    },
+    "autoload": {
+        "psr-4": {
+            "Liara\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Liara\\LiaraSDKServiceProvider"
+            ]
+        }
+    }
+}
