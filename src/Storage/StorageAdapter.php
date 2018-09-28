@@ -1,11 +1,14 @@
 <?php
 
-namespace Liara\Storage;
+namespace Liara\SDK\Storage;
 
+use Exception;
 use League\Flysystem\Util;
 use League\Flysystem\Config;
+use GuzzleHttp\Psr7\StreamWrapper;
 use GuzzleHttp\Client as HTTPClient;
 use League\Flysystem\AdapterInterface;
+use GuzzleHttp\Exception\ClientException;
 use League\Flysystem\Adapter\AbstractAdapter;
 use League\Flysystem\Adapter\CanOverwriteFiles;
 use League\Flysystem\Adapter\Polyfill\NotSupportingVisibilityTrait;
@@ -13,8 +16,6 @@ use League\Flysystem\Adapter\Polyfill\NotSupportingVisibilityTrait;
 class Adapter extends AbstractAdapter implements CanOverwriteFiles
 {
     use NotSupportingVisibilityTrait;
-
-    const API_URL = 'http://localhost:3000';
 
     /**
      * @var HTTPClient
@@ -30,9 +31,19 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
     {
         $this->options = $options;
 
+        $url = $options['url'];
+        if(empty($url)) {
+            $url = 'http://api.liara.ir';
+        }
+
+        if(empty($options['secret'])) {
+            throw new Exception('secret key is required.');
+        }
+
         $this->client = new HTTPClient([
-            'base_uri' => LiaraStorageAdapter::API_URL,
+            'base_uri' => $url,
             'headers' => [
+                'User-Agent' => 'LiaraLaravelSDK/0.1.0',
                 'Authorization' => 'Bearer ' . $options['secret'],
             ],
         ]);
@@ -99,7 +110,10 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function rename($path, $newpath) {
-
+        if ( ! $this->copy($path, $newpath)) {
+            return false;
+        }
+        return $this->delete($path);
     }
 
     /**
@@ -111,7 +125,22 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function copy($path, $newpath) {
+        try {
+            $response = $this->client->request('POST', '/v1/storage/objects/copy', [
+                'json' => [
+                    'key' => trim($path, '/'),
+                    'newKey' => trim($newpath, '/'),
+                ]
+            ]);
 
+            return true;
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
+        }
     }
 
     /**
@@ -122,7 +151,19 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function delete($path) {
+        $url = '/v1/storage/objects/' . trim($path, '/');
 
+        try {
+            $response = $this->client->request('DELETE', $url);
+
+            return true;
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
+        }
     }
 
     /**
@@ -133,7 +174,19 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function deleteDir($dirname) {
+        $url = '/v1/storage/objects/' . trim($path, '/') . '/';
 
+        try {
+            $response = $this->client->request('DELETE', $url);
+
+            return true;
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
+        }
     }
 
     /**
@@ -145,7 +198,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return array|false
      */
     public function createDir($dirname, Config $config) {
-
+        return $this->upload(rtrim($dirname) . '/', '');
     }
 
     /**
@@ -157,13 +210,14 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function has($path)
     {
-        $location = $this->applyPathPrefix($path);
-        if ($this->s3Client->doesObjectExist($this->bucket, $location, $this->options)) {
-            return true;
-        }
-        return $this->doesDirectoryExist($location);
-    }
+        $has = $this->getMetadata($path);
 
+        if($has === false) {
+            return false;
+        }
+
+        return true;
+    }
 
     /**
      * Read a file as a stream.
@@ -174,12 +228,23 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function readStream($path)
     {
-        $response = $this->readObject($path);
-        if ($response !== false) {
-            $response['stream'] = $response['contents']->detach();
-            unset($response['contents']);
+        $url = '/v1/storage/objects/' . trim($path, '');
+
+        try {
+            $response = $this->client->request('GET', $url);
+
+            $resource = StreamWrapper::getResource($response->getBody());
+    
+            return [
+                'stream' => $resource,
+            ];
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
         }
-        return $response;
     }
 
     /**
@@ -191,12 +256,23 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function read($path)
     {
-        $response = $this->readObject($path);
-        if ($response !== false) {
-            $response['contents'] = $response['contents']->getContents();
+        $url = '/v1/storage/objects/' . trim($path, '');
+
+        try {
+            $response = $this->client->request('GET', $url);
+
+            return [
+                'contents' => $response->getBody()->getContents(),
+            ];
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
         }
-        return $response;
     }
+
     /**
      * List contents of a directory.
      *
@@ -207,18 +283,57 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function listContents($directory = '', $recursive = false)
     {
-        $prefix = $this->applyPathPrefix(rtrim($directory, '/') . '/');
-        $options = ['Bucket' => $this->bucket, 'Prefix' => ltrim($prefix, '/')];
+        $prefix = rtrim($directory, '/') . '/';
+        $options = [
+            'prefix' => ltrim($prefix, '/'),
+        ];
+
         if ($recursive === false) {
-            $options['Delimiter'] = '/';
+            $options['delimiter'] = '/';
         }
-        $listing = $this->retrievePaginatedListing($options);
-        $normalizer = [$this, 'normalizeResponse'];
-        $normalized = array_map($normalizer, $listing);
-        return Util::emulateDirectories($normalized);
+
+        // TODO:
+        // $marker = null;
+        // $listing = [];
+        // while (true) {
+        //     $objectList = $this->objectList([
+        //         'prefix' => $location,
+        //         'marker' => $marker,
+        //     ]);
+
+        //     $listing = array_merge($listing, $objectList['objects']);
+        //     $marker = $objectList['nextMarker'];
+
+        //     if ($objectList['isTruncated'] === false) {
+        //         break;
+        //     }
+        // }
+
+        $listing = $this->objectList($options);
+
+        $listing = array_map(function ($object) {
+            return [
+                'type' => (int) $object['size'] > 0 ? 'file' : 'dir',
+                'dirname' => Util::dirname($object->key),
+                'path' => rtrim($object->key, '/'),
+                'timestamp' => strtotime($object->lastModified),
+                'size' => (int) $object->size
+            ];
+        }, $listing);
+
+        return Util::emulateDirectories($listing);
     }
 
-        /**
+    protected function objectList($options)
+    {
+        $response = $this->client->request('GET', '/v1/storage/objects', [
+            'query' => $options,
+        ]);
+
+        return json_decode($response->getBody()->getContents(), true);
+    }
+
+    /**
      * Get all the meta data of a file or directory.
      *
      * @param string $path
@@ -227,24 +342,24 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function getMetadata($path)
     {
-        $command = $this->s3Client->getCommand(
-            'headObject',
-            [
-                'Bucket' => $this->bucket,
-                'Key'    => $this->applyPathPrefix($path),
-            ] + $this->options
-        );
-        /* @var Result $result */
+        $url = '/v1/storage/objects/metadata/' . ltrim($path, '/');
+
         try {
-            $result = $this->s3Client->execute($command);
-        } catch (S3Exception $exception) {
-            $response = $exception->getResponse();
-            if ($response !== null && $response->getStatusCode() === 404) {
-                return false;
+            $response = $this->client->request('GET', $url);
+
+            $body = json_decode($response->getBody()->getContents(), true);
+            if( ! empty($body['metadata']['lastModified'])) {
+                $body['metadata']['timestamp'] = strtotime($body['metadata']['lastModified']);
             }
-            throw $exception;
+
+            return $body['metadata'];
+
+        } catch (ClientException $e) {
+            return false;
+
+        } catch (Exception $e) {
+            throw $e;
         }
-        return $this->normalizeResponse($result->toArray(), $path);
     }
 
     /**
@@ -270,6 +385,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
     {
         return $this->getMetadata($path);
     }
+
     /**
      * Get the timestamp of a file.
      *
@@ -303,9 +419,14 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
                     'X-Liara-Object-Key' => $path,
                 ]
             ]);
-        } catch (\Exception $e) {
-            dd($e);
+
+            return true;
+
+        } catch (ClientException $e) {
             return false;
+
+        } catch (Exception $e) {
+            throw $e;
         }
     }
 }

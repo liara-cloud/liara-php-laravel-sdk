@@ -1,11 +1,11 @@
 <?php
 
-namespace Liara;
+namespace Liara\SDK;
 
 use Storage;
 use League\Flysystem\Filesystem;
 use Illuminate\Support\ServiceProvider;
-use Liara\Storage\Adapter as StorageAdapter;
+use Liara\SDK\Storage\Adapter as StorageAdapter;
 
 class LiaraSDKServiceProvider extends ServiceProvider
 {

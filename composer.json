@@ -17,13 +17,13 @@
     },
     "autoload": {
         "psr-4": {
-            "Liara\\": "src/"
+            "Liara\\SDK\\": "src/"
         }
     },
     "extra": {
         "laravel": {
             "providers": [
-                "Liara\\LiaraSDKServiceProvider"
+                "Liara\\SDK\\LiaraSDKServiceProvider"
             ]
         }
     }
