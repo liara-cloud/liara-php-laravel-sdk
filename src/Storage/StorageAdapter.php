@@ -33,7 +33,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
 
         $url = $options['url'];
         if(empty($url)) {
-            $url = 'http://api.liara.ir';
+            $url = 'https://api.liara.ir';
         }
 
         if(empty($options['secret'])) {
