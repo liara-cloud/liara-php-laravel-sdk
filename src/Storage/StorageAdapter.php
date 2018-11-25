@@ -18,6 +18,16 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
     use NotSupportingVisibilityTrait;
 
     /**
+     * @var string
+     */
+    protected $baseURL;
+
+    /**
+     * @var string
+     */
+    protected $namespace;
+
+    /**
      * @var HTTPClient
      */
     protected $client;
@@ -31,14 +41,22 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
     {
         $this->options = $options;
 
-        $url = $options['url'];
-        if(empty($url)) {
-            $url = 'https://api.liara.ir';
+        $url = 'https://api.liara.ir';
+        if( ! empty($options['url'])) {
+            $url = $options['url'];
         }
 
         if(empty($options['secret'])) {
             throw new Exception('secret key is required.');
         }
+
+        if(empty($options['namespace'])) {
+            throw new Exception('namespace is required.');
+        }
+
+        $this->baseURL = $url;
+
+        $this->namespace = $options['namespace'];
 
         $this->client = new HTTPClient([
             'base_uri' => $url,
@@ -126,7 +144,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function copy($path, $newpath) {
         try {
-            $response = $this->client->request('POST', '/v1/storage/objects/copy', [
+            $response = $this->client->request('POST', '/v1/objects/copy', [
                 'json' => [
                     'key' => trim($path, '/'),
                     'newKey' => trim($newpath, '/'),
@@ -151,7 +169,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function delete($path) {
-        $url = '/v1/storage/objects/' . trim($path, '/');
+        $url = '/v1/objects/' . trim($path, '/');
 
         try {
             $response = $this->client->request('DELETE', $url);
@@ -174,7 +192,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return bool
      */
     public function deleteDir($dirname) {
-        $url = '/v1/storage/objects/' . trim($path, '/') . '/';
+        $url = '/v1/objects/' . trim($dirname, '/') . '/';
 
         try {
             $response = $this->client->request('DELETE', $url);
@@ -198,7 +216,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      * @return array|false
      */
     public function createDir($dirname, Config $config) {
-        return $this->upload(rtrim($dirname) . '/', '');
+        return $this->upload(rtrim($dirname) . '/', '', $config);
     }
 
     /**
@@ -228,7 +246,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function readStream($path)
     {
-        $url = '/v1/storage/objects/' . trim($path, '');
+        $url = '/v1/storage/' . ltrim($path, '/');
 
         try {
             $response = $this->client->request('GET', $url);
@@ -256,7 +274,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function read($path)
     {
-        $url = '/v1/storage/objects/' . trim($path, '');
+        $url = '/v1/storage/' . ltrim($path, '/');
 
         try {
             $response = $this->client->request('GET', $url);
@@ -309,28 +327,37 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
         //     }
         // }
 
-        $listing = $this->objectList($options);
-
-        $listing = array_map(function ($object) {
+        $objects = array_map(function ($object) {
             return [
-                'type' => (int) $object['size'] > 0 ? 'file' : 'dir',
+                'type' => 'file',
                 'dirname' => Util::dirname($object->key),
                 'path' => rtrim($object->key, '/'),
                 'timestamp' => strtotime($object->lastModified),
                 'size' => (int) $object->size
             ];
-        }, $listing);
+        }, $this->objectList($options)->objects);
+
+        $dirs = array_map(function ($dir) {
+            return [
+                'type' => 'dir',
+                'dirname' => Util::dirname($dir),
+                'path' => rtrim($dir, '/'),
+                'size' => 0
+            ];
+        }, $this->objectList($options)->commonPrefixes);
+
+        $listing = array_merge($objects, $dirs);
 
         return Util::emulateDirectories($listing);
     }
 
     protected function objectList($options)
     {
-        $response = $this->client->request('GET', '/v1/storage/objects', [
+        $response = $this->client->request('GET', '/v1/objects/list', [
             'query' => $options,
         ]);
 
-        return json_decode($response->getBody()->getContents(), true);
+        return json_decode($response->getBody()->getContents());
     }
 
     /**
@@ -342,7 +369,7 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
      */
     public function getMetadata($path)
     {
-        $url = '/v1/storage/objects/metadata/' . ltrim($path, '/');
+        $url = '/v1/objects/metadata/' . ltrim($path, '/');
 
         try {
             $response = $this->client->request('GET', $url);
@@ -398,6 +425,20 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
         return $this->getMetadata($path);
     }
 
+    // TODO:
+    // allFiles, allDirectories and setVisibility
+
+    /**
+     * Get file URL
+     * 
+     * @param string $path
+     * 
+     * @return string
+     */
+    public function getUrl($path) {
+        return $this->baseURL . '/v1/storage/' . $this->namespace . '/' . ltrim($path, '/');
+    }
+
     /**
      * Upload an object.
      *
@@ -411,12 +452,15 @@ class Adapter extends AbstractAdapter implements CanOverwriteFiles
     {
         $size = is_string($body) ? Util::contentSize($body) : Util::getStreamSize($body);
 
+        $visibility = $config->get('visibility') === AdapterInterface::VISIBILITY_PUBLIC ? 'public-read' : 'private';
+
         try {
-            $response = $this->client->request('POST', '/v1/storage/objects', [
+            $response = $this->client->request('POST', '/v1/objects', [
                 'body' => $body,
                 'headers' => [
                     'X-Liara-Object-Size' => $size,
                     'X-Liara-Object-Key' => $path,
+                    'X-Liara-Object-ACL' => $visibility,
                 ]
             ]);
 
